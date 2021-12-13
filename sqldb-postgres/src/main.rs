@@ -3,14 +3,14 @@
 //! Enables actors to access postgres back-end database through the
 //! 'wasmcloud:sqldb' capability.
 //!
-
+use minicbor::Decode;
 use bb8_postgres::tokio_postgres::NoTls;
 #[allow(unused_imports)]
 use log::{debug, error, info, trace};
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio::sync::RwLock;
 use wasmbus_rpc::provider::prelude::*;
-use wasmcloud_interface_sqldb::{Column, ExecuteResult, FetchResult, Query, SqlDb, SqlDbReceiver};
+use wasmcloud_interface_sqldb::{Column, ExecuteResult, QueryResult, Statement, SqlDb, SqlDbReceiver};
 
 mod config;
 mod error;
@@ -90,7 +90,7 @@ fn actor_id(ctx: &Context) -> Result<&String, RpcError> {
 /// wasmbus.providerReceive
 #[async_trait]
 impl SqlDb for SqlDbProvider {
-    async fn execute(&self, ctx: &Context, query: &Query) -> RpcResult<ExecuteResult> {
+    async fn execute(&self, ctx: &Context, query: &Statement) -> RpcResult<ExecuteResult> {
         let actor_id = actor_id(ctx)?;
         let rd = self.actors.read().await;
         let pool = rd
@@ -105,7 +105,8 @@ impl SqlDb for SqlDbProvider {
                 })
             }
         };
-        match conn.execute(query.as_str(), &[]).await {
+
+        match conn.execute(query.sql.as_str(), &[]).await {
             Ok(res) => Ok(ExecuteResult {
                 rows_affected: res,
                 ..Default::default()
@@ -114,7 +115,7 @@ impl SqlDb for SqlDbProvider {
                 error!(
                     "{} query:'{}' error:{}",
                     actor_id,
-                    query,
+                    query.sql.as_str(),
                     &db_err.to_string()
                 );
                 Ok(ExecuteResult {
@@ -126,7 +127,7 @@ impl SqlDb for SqlDbProvider {
     }
 
     /// perform select query on database, returning all result rows
-    async fn fetch(&self, ctx: &Context, query: &Query) -> RpcResult<FetchResult> {
+    async fn query(&self, ctx: &Context, query: &Statement) -> RpcResult<QueryResult> {
         let actor_id = actor_id(ctx)?;
         let rd = self.actors.read().await;
         let pool = rd
@@ -135,17 +136,19 @@ impl SqlDb for SqlDbProvider {
         let conn = match pool.get().await {
             Ok(conn) => conn,
             Err(e) => {
-                return Ok(FetchResult {
+                return Ok(QueryResult {
                     error: Some(DbError::Io(format!("connection pool: {}", e)).into()),
                     ..Default::default()
                 });
             }
         };
 
-        match conn.query(query.as_str(), &[]).await {
+        let output = safe_decode(query);
+
+        match conn.query(query.sql.as_str(), &[]).await {
             Ok(rows) => {
                 if rows.is_empty() {
-                    Ok(FetchResult::default())
+                    Ok(QueryResult::default())
                 } else {
                     let cols = rows
                         .get(0)
@@ -160,13 +163,13 @@ impl SqlDb for SqlDbProvider {
                         })
                         .collect::<Vec<Column>>();
                     match encode_result_set(&rows) {
-                        Ok(buf) => Ok(FetchResult {
+                        Ok(buf) => Ok(QueryResult {
                             columns: cols,
                             num_rows: rows.len() as u64,
                             error: None,
                             rows: buf,
                         }),
-                        Err(e) => Ok(FetchResult {
+                        Err(e) => Ok(QueryResult {
                             error: Some(e.into()),
                             ..Default::default()
                         }),
@@ -177,10 +180,10 @@ impl SqlDb for SqlDbProvider {
                 error!(
                     "{} query:'{}' error:{}",
                     actor_id,
-                    query,
+                    query.sql.as_str(),
                     &db_err.to_string()
                 );
-                Ok(FetchResult {
+                Ok(QueryResult {
                     error: Some(DbError::from(db_err).into()),
                     ..Default::default()
                 })
@@ -194,4 +197,15 @@ fn encode_result_set(rows: &[tokio_postgres::Row]) -> Result<Vec<u8>, DbError> {
     let mut enc = minicbor::Encoder::new(&mut buf);
     types::encode_rows(&mut enc, rows).map_err(|e| DbError::Encoding(e.to_string()))?;
     Ok(buf)
+}
+
+fn safe_decode<'a, T>(query: &'a Statement) -> Result<T, minicbor::decode::Error>
+where
+    T: minicbor::Decode<'a> + Default,
+{
+    if query.parameters.is_some() {
+        Ok(T::default())
+    } else {
+        minicbor::decode(&query.parameters.unwrap())
+    }
 }

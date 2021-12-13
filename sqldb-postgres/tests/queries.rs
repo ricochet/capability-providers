@@ -48,7 +48,7 @@ struct BuiltinTypes {
 }
 
 /// decode results from cbor to concrete structure, and print results
-fn process_results(resp: FetchResult) -> Result<(), SqlDbError> {
+fn process_results(resp: QueryResult) -> Result<(), SqlDbError> {
     println!("Received {} rows: ", resp.num_rows);
     let rows: Vec<BuiltinTypes> = minicbor::decode(&resp.rows)?;
     assert_eq!(resp.num_rows, 8, "should be 8 int* types");
@@ -70,7 +70,7 @@ async fn query(_opt: &TestOptions) -> RpcResult<()> {
 
     // use a table that's alrady there - schema types in pg_catalog
     let resp = client
-        .fetch(
+        .query(
             &ctx,
             &"select typname from pg_catalog.pg_type where typname like 'int%'".to_string(),
         )
@@ -135,7 +135,7 @@ async fn flavor_queries(ctx: &Context, client: &SqlDbSender<Provider>) -> Result
     assert_eq!(resp.rows_affected, 6, "6 rows inserted");
 
     let resp = client
-        .fetch(
+        .query(
             ctx,
             &r#"select flavor from test_flavors 
                     where flavor like '%Chocolate%' order by id"#

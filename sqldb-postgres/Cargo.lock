@@ -2999,9 +2999,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-interface-sqldb"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fc4740cb22c411aa63b7a90e6e2d49e90ee13b4bcd39254ca04cc95fec7f240"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures 0.3.17",
